@@ -21,7 +21,6 @@ from user_preferences import main as user_preferences_main
 from car_views_by_user import main as car_views_by_user_main
 from favorite_cars import main as favorite_cars_main
 from user_searches import main as user_searches_main
-from user_similarities import main as user_similarities_main
 
 # Pas d'import de data.py ni de user_recommendations.py !
 
@@ -60,10 +59,6 @@ def run_user_searches(**kwargs):
     user_searches_main()
     logger.info("Finished user_searches.py")
 
-def run_user_similarities(**kwargs):
-    logger.info("Starting user_similarities.py")
-    user_similarities_main()
-    logger.info("Finished user_similarities.py")
 
 # Timezone
 local_tz = pendulum.timezone("Africa/Casablanca")
@@ -131,16 +126,11 @@ with DAG(
         provide_context=True,
     )
 
-    generate_user_similarities = PythonOperator(
-        task_id='generate_user_similarities',
-        python_callable=run_user_similarities,
-        provide_context=True,
-    )
+
 
     # Tous en parallèle
     [
         generate_car_views_by_user,
         generate_favorite_cars,
         generate_user_searches,
-        generate_user_similarities,
     ]

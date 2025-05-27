@@ -311,7 +311,7 @@ def main():
     kafka_producer = setup_kafka_producer()
     try:
         print("\n📋 Récupération des annonces de la page 1...")
-        listings_data = scrape_listings_page(driver, 55)
+        listings_data = scrape_listings_page(driver, 1)
         if not listings_data:
             print("❌ Aucune annonce trouvée. Arrêt du programme.")
             driver.quit()

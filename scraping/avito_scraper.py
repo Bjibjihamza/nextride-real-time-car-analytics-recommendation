@@ -261,7 +261,7 @@ def scrape_avito():
     driver = setup_driver()
     data = []
     listing_id_counter = 1
-    page = 50
+    page = 1
     url = f"{base_url}?o={page}"
     print(f"🔎 Scraping page {page}: {url}")
     driver.get(url)
