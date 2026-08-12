@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 fake = Faker()
 
 # Cassandra configuration
-CASSANDRA_HOST = ['localhost']  # Adjust to your Cassandra host
+import os
+CASSANDRA_HOST = [os.environ.get('CASSANDRA_HOST', 'localhost')]  # Adjust via env
 CASSANDRA_KEYSPACE = 'cars_keyspace'
 
 # Fixed password for all users
@@ -99,15 +100,18 @@ def insert_user_preference(user_id):
         logger.error(f"Failed to insert user_id {user_id} into user_preferences: {e}")
         raise
 
-# Main function to add a single user and user_preferences row
+# Main function to add users and their user_preferences rows
 def main():
     try:
-        # Generate and insert a new user
-        user = generate_user()
-        logger.info(f"Generated user: {user['user_id']} ({user['username']})")
-        insert_user(user)
-        # Insert user_id into user_preferences
-        insert_user_preference(user['user_id'])
+        num_users = int(os.environ.get('NUM_USERS', '1'))
+        for _ in range(num_users):
+            # Generate and insert a new user
+            user = generate_user()
+            logger.info(f"Generated user: {user['user_id']} ({user['username']})")
+            insert_user(user)
+            # Insert user_id into user_preferences
+            insert_user_preference(user['user_id'])
+        logger.info(f"Inserted {num_users} user(s)")
     except Exception as e:
         logger.error(f"Error generating or inserting user/preference: {e}")
         raise

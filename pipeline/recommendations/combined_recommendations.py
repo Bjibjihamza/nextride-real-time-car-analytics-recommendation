@@ -16,7 +16,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def setup_cassandra_session():
     try:
-        cluster = Cluster(['localhost'], protocol_version=4)
+        import os
+        cassandra_host = os.environ.get('CASSANDRA_HOST', 'localhost')
+        cluster = Cluster([cassandra_host], protocol_version=4)
         session = cluster.connect('cars_keyspace')
         logging.info("Connected to Cassandra")
         return session, cluster

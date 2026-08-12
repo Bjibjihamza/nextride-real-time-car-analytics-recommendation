@@ -13,8 +13,10 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Connect to Cassandra
+import os
+CASSANDRA_HOST = os.environ.get('CASSANDRA_HOST', 'localhost')
 try:
-    cluster = Cluster(['localhost'])
+    cluster = Cluster([CASSANDRA_HOST])
     session = cluster.connect('cars_keyspace')
 except Exception as e:
     logging.error(f"Error connecting to Cassandra: {e}")

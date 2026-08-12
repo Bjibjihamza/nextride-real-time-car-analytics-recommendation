@@ -8,7 +8,8 @@ from cassandra.query import SimpleStatement
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-CASSANDRA_HOST = ['localhost']
+import os
+CASSANDRA_HOST = [os.environ.get('CASSANDRA_HOST', 'localhost')]
 CASSANDRA_KEYSPACE = 'cars_keyspace'
 
 profile = ExecutionProfile(load_balancing_policy=DCAwareRoundRobinPolicy(local_dc='datacenter1'))

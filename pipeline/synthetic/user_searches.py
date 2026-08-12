@@ -10,7 +10,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Cassandra configuration
-CASSANDRA_HOST = ['localhost']
+import os
+CASSANDRA_HOST = [os.environ.get('CASSANDRA_HOST', 'localhost')]
 CASSANDRA_KEYSPACE = 'cars_keyspace'
 
 # Connect to Cassandra
