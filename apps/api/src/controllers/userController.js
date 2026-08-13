@@ -2,7 +2,7 @@ const User = require('../models/User');
 const UserPreference = require('../models/UserPreference');
 const Car = require('../models/Car');
 const { validate: isUUID } = require('uuid');
-const client = require('../config/db');
+const pool = require('../config/db');
 
 exports.getUser = async (req, res) => {
   try {
@@ -180,12 +180,13 @@ exports.getRecommendations = async (req, res) => {
 
     console.log('Querying user_recommendations for userId:', userId);
     const query = `
-      SELECT car_id, similarity_score, recommendation_reason
-      FROM cars_keyspace.user_recommendations
-      WHERE user_id = ?
+      SELECT car_id, similarity_score, recommendation_reason, rank
+      FROM user_recommendations
+      WHERE user_id = $1
+      ORDER BY rank ASC NULLS LAST
       LIMIT 20
     `;
-    const result = await client.execute(query, [userId], { prepare: true });
+    const result = await pool.query(query, [userId]);
     console.log('Fetched recommendations:', result.rows.length);
 
     const cars = [];
@@ -227,12 +228,13 @@ exports.generateRecommendations = async (req, res) => {
     // (recommendations/combined_recommendations.py). This endpoint simply
     // returns whatever is currently stored for the user.
     const query = `
-      SELECT car_id, similarity_score, recommendation_reason
-      FROM cars_keyspace.user_recommendations
-      WHERE user_id = ?
+      SELECT car_id, similarity_score, recommendation_reason, rank
+      FROM user_recommendations
+      WHERE user_id = $1
+      ORDER BY rank ASC NULLS LAST
       LIMIT 20
     `;
-    const result = await client.execute(query, [userId], { prepare: true });
+    const result = await pool.query(query, [userId]);
     console.log('Fetched recommendations:', result.rows.length);
 
     const cars = [];

@@ -1,7 +1,7 @@
 /**
  * Backend API tests.
  *
- * Cassandra is mocked out (config/db) and the ML service is mocked out
+ * PostgreSQL (config/db) is mocked out and the ML service is mocked out
  * (axios), so these tests run anywhere without Docker.
  */
 
@@ -11,13 +11,12 @@ process.env.JWT_SECRET = 'test-secret';
 const jwt = require('jsonwebtoken');
 const request = require('supertest');
 
-const mockClient = {
-  connect: jest.fn().mockResolvedValue({}),
-  execute: jest.fn().mockResolvedValue({ rows: [], first: () => null }),
-  shutdown: jest.fn(),
+const mockPool = {
+  query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+  connect: jest.fn().mockResolvedValue({ release: jest.fn() }),
 };
 
-jest.mock('../src/config/db', () => mockClient);
+jest.mock('../src/config/db', () => mockPool);
 jest.mock('axios', () => ({
   post: jest.fn().mockResolvedValue({
     data: { prediction: { predictedPrice: 150000 } },
@@ -28,9 +27,26 @@ const app = require('../src/app');
 
 const validToken = jwt.sign({ userId: '3c31dfc1-4c66-43e9-8a7f-000000000001' }, process.env.JWT_SECRET);
 
+const carRow = {
+  id: '3c31dfc1-4c66-43e9-8a7f-000000000002',
+  source: 'avito',
+  listing_id: '123',
+  title: 'Toyota Corolla',
+  brand: 'toyota',
+  model: 'corolla',
+  year: 2018,
+  price: 150000,
+  fuel_type: 'diesel',
+  transmission: 'manuelle',
+  mileage: 90000,
+  door_count: 5,
+  sector: 'Casablanca',
+  seller_city: 'Casablanca',
+};
+
 beforeEach(() => {
-  mockClient.execute.mockReset();
-  mockClient.execute.mockResolvedValue({ rows: [], first: () => null });
+  mockPool.query.mockReset();
+  mockPool.query.mockResolvedValue({ rows: [], rowCount: 0 });
 });
 
 describe('GET /', () => {
@@ -43,20 +59,11 @@ describe('GET /', () => {
 
 describe('GET /api/cars', () => {
   it('returns a paginated car list', async () => {
-    mockClient.execute.mockResolvedValue({
-      rows: [
-        {
-          id: '3c31dfc1-4c66-43e9-8a7f-000000000002',
-          brand: 'toyota',
-          model: 'corolla',
-          title: 'Toyota Corolla',
-          price: 150000,
-          fuel_type: 'diesel',
-          transmission: 'manuelle',
-          year: 2018,
-        },
-      ],
-      first: () => null,
+    mockPool.query.mockImplementation((sql) => {
+      if (sql.includes('COUNT(*)')) {
+        return Promise.resolve({ rows: [{ total: 1 }], rowCount: 1 });
+      }
+      return Promise.resolve({ rows: [carRow], rowCount: 1 });
     });
     const res = await request(app).get('/api/cars?page=1&limit=10');
     expect(res.status).toBe(200);
@@ -72,9 +79,20 @@ describe('GET /api/cars', () => {
 
 describe('POST /api/auth/register', () => {
   it('registers a new user and returns a token', async () => {
-    mockClient.execute.mockImplementation((query) => {
-      // getByEmail should find no existing user
-      return Promise.resolve({ rows: [], first: () => null });
+    mockPool.query.mockImplementation((sql) => {
+      if (sql.includes('FROM users WHERE email')) {
+        return Promise.resolve({ rows: [], rowCount: 0 }); // no existing user
+      }
+      return Promise.resolve({
+        rows: [{
+          user_id: '3c31dfc1-4c66-43e9-8a7f-000000000001',
+          username: 'hamza',
+          email: 'hamza@example.com',
+          age: 25,
+          location: 'Casablanca',
+        }],
+        rowCount: 1,
+      });
     });
 
     const res = await request(app).post('/api/auth/register').send({
@@ -92,7 +110,7 @@ describe('POST /api/auth/register', () => {
 
 describe('POST /api/prediction', () => {
   it('predicts a price through the (mocked) ML service', async () => {
-    mockClient.execute.mockResolvedValue({ rows: [], first: () => null });
+    mockPool.query.mockResolvedValue({ rows: [], rowCount: 0 });
 
     const res = await request(app).post('/api/prediction').send({
       userId: '3c31dfc1-4c66-43e9-8a7f-000000000001',
@@ -121,15 +139,15 @@ describe('Protected /api/users routes', () => {
   });
 
   it('returns the current user with a valid token', async () => {
-    mockClient.execute.mockResolvedValue({
-      rows: [],
-      first: () => ({
+    mockPool.query.mockResolvedValue({
+      rows: [{
         user_id: '3c31dfc1-4c66-43e9-8a7f-000000000001',
         username: 'hamza',
         email: 'hamza@example.com',
         age: 25,
         location: 'Casablanca',
-      }),
+      }],
+      rowCount: 1,
     });
 
     const res = await request(app)

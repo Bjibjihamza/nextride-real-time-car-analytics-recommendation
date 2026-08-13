@@ -1,351 +1,281 @@
-const client = require('../config/db');
-const { types } = require('cassandra-driver');
+const pool = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const { validate: isUUID } = require('uuid');
 
+const CAR_COLUMNS = `
+  id, source, listing_id, title, brand, model, year, price, fuel_type,
+  transmission, mileage, door_count, fiscal_power, origin, first_owner,
+  condition, sector, seller_city, creator, equipment, image_folder, url,
+  publication_date
+`;
+
+function mapCar(row) {
+  return {
+    id: row.id,
+    source: row.source,
+    listing_id: row.listing_id,
+    title: row.title,
+    brand: row.brand,
+    model: row.model,
+    year: row.year,
+    price: row.price != null ? Number(row.price) : null,
+    fuel_type: row.fuel_type,
+    transmission: row.transmission,
+    mileage: row.mileage,
+    door_count: row.door_count,
+    seller_city: row.seller_city,
+    sector: row.sector,
+    publication_date: row.publication_date,
+    condition: row.condition,
+    creator: row.creator,
+    equipment: row.equipment,
+    first_owner: row.first_owner,
+    fiscal_power: row.fiscal_power,
+    image_folder: row.image_folder,
+    image_url: row.image_folder ? `/images/cars/${row.image_folder}/image_1.jpg` : '/images/cars/default/image_1.jpg',
+    origin: row.origin,
+    url: row.url,
+  };
+}
+
 class Car {
-  static async search(filters, retryCount = 3) {
-    try {
-      // Fetch all rows (up to a limit) since Cassandra doesn't support LIKE without SASI indexes
-      let query = 'SELECT * FROM cars_keyspace.cleaned_cars LIMIT 1000';
-      const params = [];
-      const conditions = [];
+  static async search(filters = {}) {
+    const conditions = [];
+    const params = [];
 
-      // Handle other filters that Cassandra can process natively
-      if (filters.brand) {
-        if (Array.isArray(filters.brand)) {
-          conditions.push(`brand IN (${filters.brand.map(() => '?').join(',')})`);
-          params.push(...filters.brand);
-        } else {
-          conditions.push('brand = ?');
-          params.push(filters.brand);
-        }
-      }
-      if (filters.model) {
-        conditions.push('model = ?');
-        params.push(filters.model);
-      }
-      if (filters.minPrice) {
-        conditions.push('price >= ?');
-        params.push(parseInt(filters.minPrice));
-      }
-      if (filters.maxPrice) {
-        conditions.push('price <= ?');
-        params.push(parseInt(filters.maxPrice));
-      }
-      if (filters.minYear) {
-        conditions.push('year >= ?');
-        params.push(parseInt(filters.minYear));
-      }
-      if (filters.maxYear) {
-        conditions.push('year <= ?');
-        params.push(parseInt(filters.maxYear));
-      }
-      if (filters.fuelType) {
-        if (Array.isArray(filters.fuelType)) {
-          conditions.push(`fuel_type IN (${filters.fuelType.map(() => '?').join(',')})`);
-          params.push(...filters.fuelType);
-        } else {
-          conditions.push('fuel_type = ?');
-          params.push(filters.fuelType);
-        }
-      }
-      if (filters.transmission) {
-        if (Array.isArray(filters.transmission)) {
-          conditions.push(`transmission IN (${filters.transmission.map(() => '?').join(',')})`);
-          params.push(...filters.transmission);
-        } else {
-          conditions.push('transmission = ?');
-          params.push(filters.transmission);
-        }
-      }
-      if (filters.doorCount) {
-        if (Array.isArray(filters.doorCount)) {
-          conditions.push(`door_count IN (${filters.doorCount.map(() => '?').join(',')})`);
-          params.push(...filters.doorCount);
-        } else {
-          conditions.push('door_count = ?');
-          params.push(parseInt(filters.doorCount));
-        }
-      }
-      if (filters.mileageMin) {
-        conditions.push('mileage >= ?');
-        params.push(parseInt(filters.mileageMin));
-      }
-      if (filters.mileageMax) {
-        conditions.push('mileage <= ?');
-        params.push(parseInt(filters.mileageMax));
-      }
-      if (filters.sellerCity) {
-        conditions.push('seller_city = ?');
-        params.push(filters.sellerCity);
-      }
-      if (filters.sector) {
-        conditions.push('sector = ?');
-        params.push(filters.sector);
-      }
+    const add = (clause, value) => {
+      params.push(value);
+      conditions.push(clause.replace(/\$n/g, `$${params.length}`));
+    };
 
-      if (conditions.length > 0) {
-        query = 'SELECT * FROM cars_keyspace.cleaned_cars WHERE ' + conditions.join(' AND ') + ' ALLOW FILTERING';
-      }
-
-      console.log('Executing search query:', query, 'with params:', params);
-      const result = await client.execute(query, params, { prepare: true });
-      let cars = result.rows.map(car => ({
-        id: car.id.toString(),
-        brand: car.brand,
-        model: car.model,
-        title: car.title,
-        price: car.price,
-        fuel_type: car.fuel_type,
-        transmission: car.transmission,
-        year: car.year,
-        door_count: car.door_count,
-        seller_city: car.seller_city,
-        sector: car.sector,
-        publication_date: car.publication_date,
-        condition: car.condition,
-        creator: car.creator,
-        equipment: car.equipment,
-        first_owner: car.first_owner,
-        fiscal_power: car.fiscal_power,
-        image_folder: car.image_folder,
-        mileage: car.mileage,
-        origin: car.origin,
-        source: car.source
-      }));
-
-      console.log('Fetched', cars.length, 'cars before searchTerm filter');
-
-      // Log the fields we're searching on for each car to debug
-      console.log('Cars data for searchTerm:', filters.searchTerm);
-      cars.forEach(car => {
-        console.log(`Car ID: ${car.id}, brand: ${car.brand}, model: ${car.model}, title: ${car.title}, fuel_type: ${car.fuel_type}, transmission: ${car.transmission}, year: ${car.year}`);
-      });
-
-      // Apply searchTerm filter in memory
-      if (filters.searchTerm) {
-        const searchPattern = filters.searchTerm.toLowerCase();
-        cars = cars.filter(car => {
-          return (
-            (car.brand && car.brand.toLowerCase().includes(searchPattern)) ||
-            (car.model && car.model.toLowerCase().includes(searchPattern)) ||
-            (car.title && car.title.toLowerCase().includes(searchPattern)) ||
-            (car.fuel_type && car.fuel_type.toLowerCase().includes(searchPattern)) ||
-            (car.transmission && car.transmission.toLowerCase().includes(searchPattern)) ||
-            (car.year && car.year.toString().includes(searchPattern))
-          );
-        });
-      }
-
-      console.log('Search returned', cars.length, 'cars after searchTerm filter');
-      return cars;
-    } catch (error) {
-      console.error('Error in Car.search:', error);
-      if (retryCount > 0) {
-        console.warn(`Retrying search query, attempts left: ${retryCount}`);
-        return this.search(filters, retryCount - 1);
-      }
-      return [];
+    if (filters.searchTerm) {
+      const like = `%${String(filters.searchTerm).toLowerCase()}%`;
+      add(
+        `(LOWER(brand) LIKE $n OR LOWER(model) LIKE $n OR LOWER(title) LIKE $n OR LOWER(fuel_type) LIKE $n OR LOWER(transmission) LIKE $n OR CAST(year AS TEXT) LIKE $n)`,
+        like
+      );
     }
+    if (filters.brand) {
+      if (Array.isArray(filters.brand)) {
+        add(`LOWER(brand) = ANY($n)`, filters.brand.map((b) => String(b).toLowerCase()));
+      } else {
+        add(`LOWER(brand) = $n`, String(filters.brand).toLowerCase());
+      }
+    }
+    if (filters.model) add(`LOWER(model) = $n`, String(filters.model).toLowerCase());
+    if (filters.minPrice) add(`price >= $n`, parseInt(filters.minPrice));
+    if (filters.maxPrice) add(`price <= $n`, parseInt(filters.maxPrice));
+    if (filters.minYear) add(`year >= $n`, parseInt(filters.minYear));
+    if (filters.maxYear) add(`year <= $n`, parseInt(filters.maxYear));
+    if (filters.fuelType) {
+      if (Array.isArray(filters.fuelType)) {
+        add(`LOWER(fuel_type) = ANY($n)`, filters.fuelType.map((f) => String(f).toLowerCase()));
+      } else {
+        add(`LOWER(fuel_type) = $n`, String(filters.fuelType).toLowerCase());
+      }
+    }
+    if (filters.transmission) {
+      if (Array.isArray(filters.transmission)) {
+        add(`LOWER(transmission) = ANY($n)`, filters.transmission.map((t) => String(t).toLowerCase()));
+      } else {
+        add(`LOWER(transmission) = $n`, String(filters.transmission).toLowerCase());
+      }
+    }
+    if (filters.doorCount) {
+      if (Array.isArray(filters.doorCount)) {
+        add(`door_count = ANY($n)`, filters.doorCount.map((d) => parseInt(d)));
+      } else {
+        add(`door_count = $n`, parseInt(filters.doorCount));
+      }
+    }
+    if (filters.mileageMin) add(`mileage >= $n`, parseInt(filters.mileageMin));
+    if (filters.mileageMax) add(`mileage <= $n`, parseInt(filters.mileageMax));
+    if (filters.sellerCity) add(`LOWER(seller_city) = $n`, String(filters.sellerCity).toLowerCase());
+    if (filters.sector) add(`LOWER(sector) = $n`, String(filters.sector).toLowerCase());
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const page = parseInt(filters.page) || 1;
+    const limit = parseInt(filters.limit) || 50;
+    const offset = (page - 1) * limit;
+
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS total FROM cars ${where}`, params);
+    const total = countRes.rows[0].total;
+
+    const result = await pool.query(
+      `SELECT ${CAR_COLUMNS} FROM cars ${where} ORDER BY price DESC NULLS LAST LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    );
+    return { cars: result.rows.map(mapCar), total };
   }
 
   static async getById(id) {
-    if (!isUUID(id)) {
-      console.error('Invalid car id format in Car.getById:', id);
-      return null;
-    }
-    try {
-      const query = 'SELECT * FROM cars_keyspace.cleaned_cars WHERE id = ?';
-      const result = await client.execute(query, [id], { prepare: true });
-      if (result.rows.length === 0) {
-        console.log('No car found for id:', id);
-        return null;
-      }
-      const car = result.rows[0];
-      return {
-        id: car.id.toString(),
-        brand: car.brand,
-        model: car.model,
-        title: car.title,
-        price: car.price,
-        fuel_type: car.fuel_type,
-        transmission: car.transmission,
-        year: car.year,
-        door_count: car.door_count,
-        seller_city: car.seller_city,
-        sector: car.sector,
-        publication_date: car.publication_date,
-        condition: car.condition,
-        creator: car.creator,
-        equipment: car.equipment,
-        first_owner: car.first_owner,
-        fiscal_power: car.fiscal_power,
-        image_folder: car.image_folder,
-        image_url: car.image_folder ? `/images/cars/${car.image_folder}/image_1.jpg` : '/images/cars/default/image_1.jpg',
-        mileage: car.mileage,
-        origin: car.origin,
-        source: car.source,
-      };
-    } catch (error) {
-      console.error('Error in Car.getById:', error);
-      return null;
-    }
+    if (!isUUID(id)) return null;
+    const result = await pool.query(`SELECT ${CAR_COLUMNS} FROM cars WHERE id = $1`, [id]);
+    return result.rows.length ? mapCar(result.rows[0]) : null;
   }
 
-  static async getAll(page, limit) {
+  static async getAll(page = 1, limit = 10) {
     const offset = (page - 1) * limit;
-    const query = 'SELECT * FROM cars_keyspace.cleaned_cars LIMIT 1000';
-    const result = await client.execute(query, [], { prepare: true });
-    const total = result.rows.length;
-    const cars = result.rows
-      .slice(offset, offset + limit)
-      .map((car) => ({
-        id: car.id.toString(),
-        brand: car.brand,
-        model: car.model,
-        title: car.title,
-        price: car.price,
-        fuel_type: car.fuel_type,
-        transmission: car.transmission,
-        year: car.year,
-        door_count: car.door_count,
-        seller_city: car.seller_city,
-        sector: car.sector,
-        publication_date: car.publication_date,
-        condition: car.condition,
-        creator: car.creator,
-        equipment: car.equipment,
-        first_owner: car.first_owner,
-        fiscal_power: car.fiscal_power,
-        image_folder: car.image_folder,
-        image_url: car.image_folder ? `/images/cars/${car.image_folder}/image_1.jpg` : '/images/cars/default/image_1.jpg',
-        mileage: car.mileage,
-        origin: car.origin,
-        source: car.source,
-      }));
-    return { cars, total };
+    const totalRes = await pool.query(`SELECT COUNT(*)::int AS total FROM cars`);
+    const total = totalRes.rows[0].total;
+    const result = await pool.query(
+      `SELECT ${CAR_COLUMNS} FROM cars ORDER BY publication_date DESC NULLS LAST LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    return { cars: result.rows.map(mapCar), total };
   }
 
-  static async getLatest(limit) {
-    console.log('Fetching latest cars with limit:', limit);
-    const query = 'SELECT * FROM cars_keyspace.cleaned_cars LIMIT 1000';
-    const result = await client.execute(query, [], { prepare: true });
-    console.log('Fetched rows:', result.rows.length);
+  static async getLatest(limit = 10) {
+    const result = await pool.query(
+      `SELECT ${CAR_COLUMNS} FROM cars WHERE publication_date IS NOT NULL AND publication_date != ''
+       ORDER BY publication_date DESC LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map(mapCar);
+  }
 
-    const parseDate = (dateStr) => {
-      if (!dateStr) return null;
-      const [datePart, timePart] = dateStr.split(' ');
-      const [day, month, year] = datePart.split('/').map(Number);
-      const [hours, minutes] = timePart.split(':').map(Number);
-      return new Date(year, month - 1, day, hours, minutes);
-    };
+  static async getRecentlyViewed(userId, limit = 5) {
+    const result = await pool.query(
+      `SELECT c.${CAR_COLUMNS}
+         FROM cars c
+         JOIN (
+           SELECT car_id, MAX(view_timestamp) AS last_view
+             FROM car_views_by_user
+            WHERE user_id = $1
+            GROUP BY car_id
+            ORDER BY last_view DESC
+            LIMIT $2
+         ) v ON v.car_id = c.id
+        ORDER BY v.last_view DESC`,
+      [userId, limit]
+    );
+    return result.rows.map(mapCar);
+  }
 
-    return result.rows
-      .filter(car => car.publication_date)
-      .sort((a, b) => {
-        const dateA = parseDate(a.publication_date);
-        const dateB = parseDate(b.publication_date);
-        if (!dateA) return 1;
-        if (!dateB) return -1;
-        return dateB - dateA;
-      })
-      .slice(0, limit)
-      .map(car => ({
-        id: car.id.toString(),
-        brand: car.brand,
-        model: car.model,
-        title: car.title,
-        price: car.price,
-        fuel_type: car.fuel_type,
-        transmission: car.transmission,
-        year: car.year,
-        door_count: car.door_count,
-        seller_city: car.seller_city,
-        sector: car.sector,
-        publication_date: car.publication_date,
-        condition: car.condition,
-        creator: car.creator,
-        equipment: car.equipment,
-        first_owner: car.first_owner,
-        fiscal_power: car.fiscal_power,
-        image_folder: car.image_folder,
-        mileage: car.mileage,
-        origin: car.origin,
-        source: car.source,
-      }));
+  static async recordView(userId, carId, viewSource = 'detail_page') {
+    if (!isUUID(userId) || !isUUID(carId)) return;
+    await pool.query(
+      `INSERT INTO car_views_by_user (user_id, view_date, view_timestamp, car_id, view_duration_seconds, view_source)
+       VALUES ($1, CURRENT_DATE, now(), $2, 30, $3)`,
+      [userId, carId, viewSource]
+    );
   }
 
   static async getFavoritesByUserId(userId) {
-    try {
-      const userUuid = types.Uuid.fromString(userId);
-      const query = 'SELECT car_id FROM cars_keyspace.favorite_cars_by_user WHERE user_id = ?';
-      const result = await client.execute(query, [userUuid], { prepare: true });
-      const carIds = result.rows.map(row => row.car_id.toString());
-      if (carIds.length === 0) return [];
-
-      const cars = [];
-      for (const carId of carIds) {
-        try {
-          const car = await this.getById(carId);
-          if (car) cars.push(car);
-        } catch (error) {
-          console.error(`Skipping invalid car ID ${carId}:`, error.message);
-        }
-      }
-      return cars;
-    } catch (error) {
-      console.error('Error in getFavoritesByUserId:', error.message);
-      return [];
-    }
+    const result = await pool.query(
+      `SELECT c.${CAR_COLUMNS}
+         FROM favorite_cars_by_user f
+         JOIN cars c ON c.id = f.car_id
+        WHERE f.user_id = $1
+        ORDER BY f.added_timestamp DESC`,
+      [userId]
+    );
+    return result.rows.map(mapCar);
   }
 
   static async addFavorite(userId, carId) {
-    try {
-      const userUuid = types.Uuid.fromString(userId);
-      const carUuid = types.Uuid.fromString(carId);
-      const query = 'INSERT INTO cars_keyspace.favorite_cars_by_user (user_id, added_date, added_timestamp, car_id) VALUES (?, ?, ?, ?)';
-      const addedDate = new Date().toISOString().split('T')[0];
-      const timestamp = new Date();
-      await client.execute(query, [userUuid, addedDate, timestamp, carUuid], { prepare: true });
-    } catch (error) {
-      console.error('Error in addFavorite:', error.message, 'carId:', carId);
-      throw new Error('Invalid ID format');
-    }
+    if (!isUUID(userId) || !isUUID(carId)) throw new Error('Invalid ID format');
+    await pool.query(
+      `INSERT INTO favorite_cars_by_user (user_id, car_id, added_timestamp)
+       VALUES ($1, $2, now()) ON CONFLICT (user_id, car_id) DO NOTHING`,
+      [userId, carId]
+    );
   }
 
   static async removeFavorite(userId, carId) {
-    try {
-      const userUuid = types.Uuid.fromString(userId);
-      const carUuid = types.Uuid.fromString(carId);
+    if (!isUUID(userId) || !isUUID(carId)) throw new Error('Invalid ID format');
+    const result = await pool.query(
+      `DELETE FROM favorite_cars_by_user WHERE user_id = $1 AND car_id = $2`,
+      [userId, carId]
+    );
+    return (result.rowCount || 0) > 0;
+  }
 
-      // Step 1: Find the favorite entry with the given user_id and car_id
-      const findQuery = `
-        SELECT added_timestamp
-        FROM cars_keyspace.favorite_cars_by_user
-        WHERE user_id = ? AND car_id = ? ALLOW FILTERING
-      `;
-      const findResult = await client.execute(findQuery, [userUuid, carUuid], { prepare: true });
+  static async create(carData) {
+    const carId = carData.id || uuidv4();
+    const result = await pool.query(
+      `INSERT INTO cars (
+         id, source, listing_id, title, brand, model, year, price, fuel_type,
+         transmission, mileage, door_count, fiscal_power, origin, first_owner,
+         condition, sector, seller_city, creator, equipment, image_folder, url,
+         publication_date
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+       RETURNING ${CAR_COLUMNS}`,
+      [
+        carId,
+        carData.source || 'user_submission',
+        carData.listing_id || null,
+        carData.title,
+        carData.brand,
+        carData.model,
+        carData.year,
+        carData.price,
+        carData.fuel_type,
+        carData.transmission,
+        carData.mileage,
+        carData.door_count,
+        carData.fiscal_power,
+        carData.origin || null,
+        carData.first_owner || null,
+        carData.condition || null,
+        carData.sector,
+        carData.seller_city,
+        carData.creator || null,
+        carData.equipment || '',
+        carData.image_folder || '',
+        carData.url || null,
+        carData.publication_date || null,
+      ]
+    );
+    return mapCar(result.rows[0]);
+  }
 
-      if (findResult.rows.length === 0) {
-        console.log(`No favorite found for userId: ${userId}, carId: ${carId}`);
-        return false;
-      }
-
-      // Step 2: Delete using the primary key (user_id, added_timestamp)
-      const { added_timestamp } = findResult.rows[0];
-      const deleteQuery = `
-        DELETE FROM cars_keyspace.favorite_cars_by_user
-        WHERE user_id = ? AND added_timestamp = ?
-      `;
-      await client.execute(deleteQuery, [userUuid, added_timestamp], { prepare: true });
-
-      console.log(`Removed favorite for userId: ${userId}, carId: ${carId}`);
-      return true;
-    } catch (error) {
-      console.error('Error in removeFavorite:', error.message, 'userId:', userId, 'carId:', carId);
-      throw error;
+  static async getBrandDistribution({ yearMin, yearMax, fuelType }) {
+    const conditions = [];
+    const params = [];
+    if (fuelType && fuelType !== 'All') {
+      params.push(String(fuelType).toLowerCase());
+      conditions.push(`LOWER(fuel_type) = $${params.length}`);
     }
+    if (yearMin && yearMax) {
+      params.push(parseInt(yearMin), parseInt(yearMax));
+      conditions.push(`year BETWEEN $${params.length - 1} AND $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const result = await pool.query(
+      `SELECT brand, COUNT(*)::int AS count FROM cars ${where} GROUP BY brand ORDER BY count DESC`,
+      params
+    );
+    return result.rows;
+  }
+
+  static async getCarBubbles({ yearMin, yearMax, maxPrice, fuelType }) {
+    const conditions = [];
+    const params = [];
+    if (fuelType && fuelType !== 'All') {
+      params.push(String(fuelType).toLowerCase());
+      conditions.push(`LOWER(fuel_type) = $${params.length}`);
+    }
+    if (yearMin && yearMax) {
+      params.push(parseInt(yearMin), parseInt(yearMax));
+      conditions.push(`year BETWEEN $${params.length - 1} AND $${params.length}`);
+    }
+    const priceCap = maxPrice ? parseInt(maxPrice) : 10000000;
+    params.push(priceCap);
+    conditions.push(`price > 0 AND price <= $${params.length}`);
+
+    const result = await pool.query(
+      `SELECT brand, price, year, fuel_type, COUNT(*) OVER (PARTITION BY brand) AS popularity
+         FROM cars WHERE ${conditions.join(' AND ')}`,
+      params
+    );
+    return result.rows.map((r) => ({
+      brand: r.brand,
+      price: r.price != null ? Number(r.price) : null,
+      year: r.year,
+      fuel_type: r.fuel_type,
+      popularity: parseInt(r.popularity),
+    }));
   }
 }
 

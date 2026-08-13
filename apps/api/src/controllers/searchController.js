@@ -1,5 +1,5 @@
 const Car = require('../models/Car');
-const client = require('../config/db');
+const pool = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 
 exports.searchCars = async (req, res) => {
@@ -40,17 +40,15 @@ exports.searchCars = async (req, res) => {
 
     // Perform search using Car model with error handling
     let cars = [];
+    let total = 0;
     try {
-      cars = await Car.search(filters);
+      const result = await Car.search({ ...filters, page, limit });
+      cars = result.cars;
+      total = result.total;
     } catch (searchError) {
       console.error('Error in search method:', searchError);
-      // Fall back to returning an empty array
       cars = [];
     }
-
-    // Apply pagination in memory
-    const startIndex = (page - 1) * limit;
-    const paginatedCars = cars.slice(startIndex, startIndex + limit);
 
     // If user is logged in, store search in user_searches
     if (userId) {
@@ -81,23 +79,20 @@ exports.searchCars = async (req, res) => {
         const query = `
           INSERT INTO user_searches (
             user_id,
-            search_date,
             search_timestamp,
             search_query,
             filters,
             result_count
-          ) VALUES (?, ?, ?, ?, ?, ?)
+          ) VALUES ($1, now(), $2, $3, $4)
         `;
         const params = [
           userId,
-          new Date().toISOString().split('T')[0], // search_date
-          new Date(), // search_timestamp
           searchQuery,
-          cleanFilters, // map<text,text> — the driver encodes plain objects as maps
-          cars.length
+          cleanFilters, // jsonb — pg serialises objects automatically
+          total
         ];
 
-        await client.execute(query, params, { prepare: true });
+        await pool.query(query, params);
       } catch (historyError) {
         console.error('Error storing search history:', historyError);
         // Continue even if search history storage fails
@@ -106,10 +101,10 @@ exports.searchCars = async (req, res) => {
 
     res.status(200).json({
       message: 'Search completed successfully',
-      cars: paginatedCars,
+      cars,
       page: parseInt(page),
       limit: parseInt(limit),
-      total: cars.length
+      total
     });
   } catch (error) {
     console.error('Error searching cars:', error);
@@ -131,13 +126,15 @@ exports.getSearchHistory = async (req, res) => {
     }
 
     const query = `
-      SELECT * FROM user_searches
-      WHERE user_id = ?
-      LIMIT ?
+      SELECT search_timestamp, search_query, filters, result_count
+      FROM user_searches
+      WHERE user_id = $1
+      ORDER BY search_timestamp DESC
+      LIMIT $2
     `;
     const params = [userId, limit];
 
-    const result = await client.execute(query, params, { prepare: true });
+    const result = await pool.query(query, params);
     const searches = result.rows;
 
     res.status(200).json({

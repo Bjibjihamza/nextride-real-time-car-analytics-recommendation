@@ -1,20 +1,21 @@
-const cassandra = require('cassandra-driver');
+const { Pool } = require('pg');
 
-const contactPoint = process.env.CASSANDRA_CONTACT_POINT || 'localhost';
-const localDataCenter = process.env.CASSANDRA_LOCAL_DATACENTER || 'datacenter1';
-const keyspace = process.env.CASSANDRA_KEYSPACE || 'cars_keyspace';
-
-const client = new cassandra.Client({
-  contactPoints: [contactPoint],
-  localDataCenter,
-  keyspace,
+const pool = new Pool({
+  host: process.env.PGHOST || process.env.PG_HOST || 'localhost',
+  port: parseInt(process.env.PGPORT || process.env.PG_PORT || '5432', 10),
+  database: process.env.PGDATABASE || process.env.PG_DATABASE || 'nextride',
+  user: process.env.PGUSER || process.env.PG_USER || 'nextride',
+  password: process.env.PGPASSWORD || process.env.PG_PASSWORD || 'nextride',
 });
 
 if (process.env.NODE_ENV !== 'test') {
-  client
+  pool
     .connect()
-    .then(() => console.log(`Connected to Cassandra at ${contactPoint} (${keyspace})`))
-    .catch((err) => console.error('Error connecting to Cassandra:', err.message));
+    .then((client) => {
+      console.log(`Connected to PostgreSQL at ${pool.options.host}:${pool.options.port}/${pool.options.database}`);
+      client.release();
+    })
+    .catch((err) => console.error('Error connecting to PostgreSQL:', err.message));
 }
 
-module.exports = client;
+module.exports = pool;

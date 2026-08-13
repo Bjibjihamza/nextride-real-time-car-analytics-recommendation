@@ -1,4 +1,4 @@
-const client = require('../config/db');
+const pool = require('../config/db');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
@@ -48,10 +48,7 @@ exports.predictPrice = async (req, res) => {
       return res.status(500).json({ message: 'Error generating price prediction', error: mlError.message });
     }
 
-    // Convert car_features to a JSON string for Cassandra
-    const carFeatures = JSON.stringify(req.body);
-
-    // Store prediction in Cassandra
+    // Store prediction in Postgres
     const predictionId = uuidv4();
     const query = `
       INSERT INTO car_predictions (
@@ -60,17 +57,16 @@ exports.predictPrice = async (req, res) => {
         car_features,
         predicted_price,
         prediction_timestamp
-      ) VALUES (?, ?, ?, ?, ?)
+      ) VALUES ($1, $2, $3, $4, now())
     `;
     const params = [
       predictionId,
       userId,
-      carFeatures,
-      predictedPrice,
-      new Date()
+      JSON.stringify(req.body), // jsonb
+      predictedPrice
     ];
 
-    await client.execute(query, params, { prepare: true });
+    await pool.query(query, params);
 
     res.status(200).json({
       message: 'Price predicted successfully',
@@ -100,13 +96,15 @@ exports.getPredictionHistory = async (req, res) => {
     }
 
     const query = `
-      SELECT * FROM car_predictions
-      WHERE user_id = ?
-      LIMIT ?
+      SELECT prediction_id, user_id, car_features, predicted_price, prediction_timestamp
+      FROM car_predictions
+      WHERE user_id = $1
+      ORDER BY prediction_timestamp DESC
+      LIMIT $2
     `;
     const params = [userId, limit];
 
-    const result = await client.execute(query, params, { prepare: true });
+    const result = await pool.query(query, params);
     const predictions = result.rows;
 
     res.status(200).json({

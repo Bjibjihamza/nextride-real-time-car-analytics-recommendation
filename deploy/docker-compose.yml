@@ -81,6 +81,29 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------------
+  # Operational database (OLTP serving) - replaces Cassandra
+  # ------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: nextride-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: nextride
+      POSTGRES_USER: nextride
+      POSTGRES_PASSWORD: nextride
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextride -d nextride"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
   # Messaging
   # ------------------------------------------------------------------
   kafka:
@@ -221,14 +244,15 @@ services:
       - "5002:5000"
     environment:
       PORT: "5000"
-      CASSANDRA_CONTACT_POINT: cassandra
-      CASSANDRA_LOCAL_DATACENTER: datacenter1
-      CASSANDRA_KEYSPACE: cars_keyspace
+      PG_HOST: postgres
+      PG_DATABASE: nextride
+      PG_USER: nextride
+      PG_PASSWORD: nextride
       ML_SERVICE_URL: http://ml-service:5001/predict
       JWT_SECRET: nextride-dev-secret-change-me
     depends_on:
-      cassandra-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       ml-service:
         condition: service_healthy
     healthcheck:
@@ -303,3 +327,4 @@ volumes:
   kafka_data:
   spark_checkpoint:
   spark_ivy:
+  postgres_data:
