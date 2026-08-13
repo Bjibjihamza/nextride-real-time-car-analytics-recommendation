@@ -11,6 +11,7 @@ Run locally:
 Or via docker: docker compose -f deploy/docker-compose.yml up -d dashboard
 """
 
+import json
 import os
 
 import pandas as pd
@@ -33,7 +34,9 @@ def q(sql):
         timeout=60,
     )
     r.raise_for_status()
-    return pd.DataFrame([eval(l) for l in r.text.splitlines() if l.strip()]) if r.text.strip() else pd.DataFrame()
+    if not r.text.strip():
+        return pd.DataFrame()
+    return pd.DataFrame([json.loads(l) for l in r.text.splitlines() if l.strip()])
 
 
 def df(source):

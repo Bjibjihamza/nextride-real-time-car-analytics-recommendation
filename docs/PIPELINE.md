@@ -2,44 +2,60 @@
 
 ## Data flow (step by step)
 
-### 1. Producer (`pipeline/producers/producer.py`)
-- Reads `data/avito/avito_complete.csv` and `data/moteur/moteur_complete.csv`.
-- Headers are UTF-8; a UTF-8 BOM on the Moteur file is stripped.
-- Publishes each non-empty row as a JSON message to `avito_cars` / `moteur_cars`.
-- Creates the topics on first run (via `KafkaAdminClient`).
+### 1. Scrapers (`pipeline/scrapers/`)
+- `avito_scraper.py` — Avito is a Next.js app: listings and details are parsed
+  from the `__NEXT_DATA__` JSON blob (no Selenium).
+- `moteur_scraper.py` — Moteur is server-rendered HTML; cards + spec table are
+  parsed with lxml.
+- Both emit the **canonical unified schema** (`pipeline/scrapers/schema.py`),
+  so Avito and Moteur use identical labels.
+- Checkpointed (`data/<source>/.progress.json`): a run resumes after the last
+  completed page; sponsored ads repeated across pages are skipped in-run.
+- Rows are inserted into `bronze.listings` (ClickHouse). A CSV is written as a
+  **test artifact only** — production uses the warehouse path.
 
-### 2. Spark streaming job (`pipeline/processors/spark_cleaning.py`)
-- Structured Streaming, `trigger(processingTime="5s")`, `startingOffsets=earliest`.
-- Parses each JSON payload against a French field schema.
-- Cleaning pipeline per source (`avito` / `moteur`):
-  - price: strip spaces / `DH`, keep `10000–10_000_000`
-  - year: keep 4-digit years in `1900–2025`
-  - mileage: avito ranges `10000-20000` averaged; moteur numeric
-  - fiscal power: `3–50`
-  - doors: `2–5`
-  - fuel: `essence|diesel|hybride`
-  - sector: normalised city names (Fès→Fes, …)
-  - dates → `dd/MM/yyyy HH:mm`
-- Column mapping French → English (`Prix`→`price`, `Marque`→`brand`, …).
-- ID: `uuid5("avito|moteur", listing_id)` → idempotent re-publishes.
-- Writes to `cars_keyspace.cleaned_cars` (append, consistency ONE).
+### 2. Bronze (`bronze.listings`, ClickHouse)
+Raw append-only captures. Duplicates across runs are intentional (they build
+history). Full payload is kept as JSON (`payload` column); key columns are
+typed for direct querying. Schema: `infra/clickhouse/init/01_bronze.sql`.
 
-### 3. Cassandra (`cars_keyspace`)
-Schema: `infra/cassandra/schema.cql`.
+### 3. Silver (`silver.listings`, ClickHouse)
+`pipeline/processors/silver_cleaner.py` reads bronze and writes a cleaned,
+deduplicated table — one row per `(source, listing_id)` using the latest
+capture. Cleaning rules (discovered via EDA over ~2000 ads):
+- price: `10000–10_000_000` (filters placeholders like `23 MAD`)
+- year: `1980–2026`
+- mileage: `0–1_000_000`
+- doors: `2–5` ; fiscal power: `3–50`
+- fuel → `essence|diesel|hybride|lpg|electrique` ; transmission →
+  `manuelle|automatique`
+- sector: accents/aliases normalised (Fès→Fes, Salé→Sale, …)
+- `N/A`/empty → `NULL`
+Schema: `infra/clickhouse/init/02_silver.sql`. Tests:
+`tests/scrapers/test_silver_cleaner.py`.
 
-| Table | Purpose | Primary key |
-|-------|---------|-------------|
-| `cleaned_cars` | processed listings | `id` |
-| `users` | registered users | `user_id` |
-| `user_preferences` | user car preferences | `user_id` |
-| `car_views_by_user` | view events | `((user_id, view_date), view_timestamp)` |
-| `favorite_cars_by_user` | saved cars | `(user_id, added_timestamp)` |
-| `user_searches` | search history | `(user_id, search_timestamp)` |
-| `user_similarities` | pairwise user similarity | `(target_user_id, reference_user_id)` |
-| `user_recommendations` | precomputed recommendations | `(user_id, car_id)` |
-| `car_predictions` | stored price predictions | `(user_id, prediction_timestamp)` |
+### 4. Gold (`gold.*`, ClickHouse)
+Live aggregate views over silver (`market_overview`, `brand_stats`,
+`sector_stats`, `fuel_transmission_stats`, `year_stats`, `price_trend`),
+consumed by the Streamlit dashboard (`apps/dashboard`, port 8501).
+Schema: `infra/clickhouse/init/03_gold.sql`.
 
-### 4. ML price service (`apps/ml-service/app/api.py`)
+### 5. Serving layer (PostgreSQL)
+`pipeline/serving/sync_cars.py` mirrors silver into the `cars` table with a
+deterministic `uuid5(source, listing_id)` id. The operational schema
+(`infra/postgres/init/01_schema.sql`) holds `users`, `cars`,
+`user_preferences`, `car_views_by_user`, `favorite_cars_by_user`,
+`user_searches`, `user_similarities`, `user_recommendations`,
+`car_predictions`.
+
+One-shot seeds:
+- `data-gen` (`pipeline/synthetic/`) — users, preferences, views, favorites,
+  searches.
+- `recommend` (`pipeline/recommendations/combined_recommendations.py`) —
+  content/user/item-based + hybrid recommendations into
+  `user_recommendations`.
+
+### 6. ML price service (`apps/ml-service/app/api.py`)
 Deterministic estimator. Same contract as the original service:
 
 ```json
@@ -52,8 +68,9 @@ The original TensorFlow model artifacts (`.h5` weights, scalers, categorical
 mappings) are kept in `apps/ml-service/artifacts/` but not used by the
 containerized pipeline yet.
 
-### 5. Backend API (`backend/`)
-Express app (split into `app.js` + `server.js`).
+### 7. Backend API (`apps/api/`)
+Express app (split into `app.js` + `server.js`), reads PostgreSQL via
+`node-postgres`.
 
 | Method | Route | Purpose |
 |--------|-------|---------|
@@ -74,8 +91,8 @@ Express app (split into `app.js` + `server.js`).
 | POST | `/api/prediction` | predict price (calls ml-service) |
 | GET | `/api/prediction/history` | user prediction history |
 
-### 6. Frontend (`nextride/`)
-React 19 + MUI + react-router. API URLs centralized in `src/config.js`:
+### 8. Frontend (`apps/web/`)
+React + MUI + react-router. API URLs centralized in `src/config.js`:
 
 ```js
 export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5002';
@@ -86,29 +103,23 @@ export const ML_BASE_URL   = process.env.REACT_APP_ML_URL   || 'http://localhost
 
 | Service | Variable | Default |
 |---------|----------|---------|
-| spark | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
-| spark | `CASSANDRA_HOST` / `CASSANDRA_PORT` / `CASSANDRA_KEYSPACE` | `localhost` / `9042` / `cars_keyspace` |
-| spark | `CHECKPOINT_BASE` | `/tmp/nextride` |
-| producer | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
-| producer | `AVITO_CSV` / `MOTEUR_CSV` | `data/avito/…`, `data/moteur/…` |
-| ml-service | `PORT` | `5001` |
-| backend | `CASSANDRA_CONTACT_POINT` / `CASSANDRA_KEYSPACE` | `localhost` / `cars_keyspace` |
+| scrapers / cleaners | `CLICKHOUSE_URL` / `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` | `http://localhost:8123` / `default` / `nextride` |
+| backend | `PG_HOST` / `PG_DATABASE` / `PG_USER` / `PG_PASSWORD` | `postgres` / `nextride` / `nextride` / `nextride` |
 | backend | `ML_SERVICE_URL` | `http://localhost:5001/predict` |
 | backend | `JWT_SECRET` | (set in compose) |
-| data-gen | `CASSANDRA_HOST`, `NUM_USERS` | `cassandra`, `10` |
-| recommend | `CASSANDRA_HOST`, `MAX_USERS` | `cassandra`, `5` |
-| data-gen/recommend | `WAIT_FOR_TABLE`, `WAIT_TIMEOUT` | cleaned_cars/users, `180` |
+| data-gen | `PG_HOST`, `NUM_USERS` | `postgres`, `10` |
+| recommend | `PG_HOST`, `MAX_USERS` | `postgres`, `5` |
+| ml-service | `PORT` | `5001` |
 | frontend build | `REACT_APP_API_URL` | `http://localhost:5002` |
 
 ## Extending
 
-- **Add a scraping source**: publish new JSON messages to a topic with a schema
-  defined in `pipeline/processors/spark_cleaning.py`, add its French→English
-  mapping, and register it in the `FRENCH_TO_ENGLISH` dict.
-- **Swap in the real model**: retrain a model on the data in
-  `apps/ml-service/data/`, save the weights into `apps/ml-service/artifacts/`,
-  then make `apps/ml-service/app/` load them and keep the same `/predict`
-  contract.
+- **Add a scraping source**: emit rows in the canonical schema
+  (`pipeline/scrapers/schema.py`) into `bronze.listings`.
+- **Tighten cleaning**: edit the rules in
+  `pipeline/processors/silver_cleaner.py` (and its tests).
+- **Swap in the real model**: retrain on `silver.listings`, save weights into
+  `apps/ml-service/artifacts/`, and keep the same `/predict` contract.
 - **New recommendation method**: add it to
   `pipeline/recommendations/combined_recommendations.py` and write to
   `user_recommendations`.

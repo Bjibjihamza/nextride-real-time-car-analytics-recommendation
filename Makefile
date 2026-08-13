@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/docker-compose.yml
 
-.PHONY: up down build ps logs reset seed seed-data recommend smoke test test-backend test-ml
+.PHONY: up down build ps logs reset seed seed-data recommend sync-cars smoke test test-backend test-ml
 
 ## Build & start the full stack (first build takes a few minutes)
 up:
@@ -37,9 +37,9 @@ seed-data:
 recommend:
 	$(COMPOSE) run --rm recommend
 
-## Re-publish the scraped CSVs to Kafka (idempotent)
-publish:
-	$(COMPOSE) run --rm producer
+## Mirror ClickHouse silver into Postgres (cars serving table)
+sync-cars:
+	python pipeline/serving/sync_cars.py
 
 ## End-to-end smoke test (requires the stack to be up)
 smoke:

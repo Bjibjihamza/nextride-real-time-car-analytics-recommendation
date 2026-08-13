@@ -126,10 +126,10 @@ CREATE TABLE IF NOT EXISTS user_similarities (
 );
 
 -- ---------------------------------------------------- car_predictions
--- user_id relaxed (no FK): predictions are stored for any client-provided id.
+-- user_id is TEXT (any client-provided id), relaxed on purpose.
 CREATE TABLE IF NOT EXISTS car_predictions (
     prediction_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id             UUID,
+    user_id             TEXT,
     car_features        JSONB DEFAULT '{}'::jsonb,
     predicted_price     REAL,
     prediction_timestamp TIMESTAMPTZ DEFAULT now()

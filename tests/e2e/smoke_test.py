@@ -4,12 +4,12 @@ End-to-end smoke test for the NextRide pipeline.
 Verifies, against a running stack:
   * backend API is up            (GET  /)
   * ML service is up             (GET  /health)
-  * Cassandra is populated       (GET  /api/cars -> non-empty)
+  * car catalog is populated     (GET  /api/cars -> non-empty)
   * user registration + login    (POST /api/auth/register, /api/auth/login)
   * car search                  (POST /api/search)
   * price prediction            (POST /api/prediction)
 
-Usage:  python scripts/smoke_test.py
+Usage:  python tests/e2e/smoke_test.py
 """
 
 import json
@@ -68,10 +68,10 @@ def main():
     status, health = wait_until_ready(ml_ready)
     results.append(check("ML service is up", status == 200 and health.get("status") == "ok"))
 
-    # Cassandra populated (cleaned_cars)
+    # Cars present in the serving database
     status, body = request("GET", f"{API}/api/cars?page=1&limit=5")
     car_count = len(body.get("cars", [])) if isinstance(body.get("cars"), list) else 0
-    results.append(check("Cassandra contains cleaned cars", car_count > 0, f"{car_count} cars"))
+    results.append(check("serving database contains cars", car_count > 0, f"{car_count} cars"))
 
     # Register a fresh user
     username = f"smoke_{int(time.time())}"

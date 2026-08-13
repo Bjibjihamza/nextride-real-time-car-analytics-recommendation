@@ -33,7 +33,7 @@ nextride/
 ├── apps/                        # Applications servies (HTTP / UI)
 │   ├── api/                     # Express REST API            (ex: backend/)
 │   │   ├── src/
-│   │   │   ├── config/          #   env, client Cassandra
+│   │   │   ├── config/          #   env, client PostgreSQL
 │   │   │   ├── routes/          #   auth, cars, search, prediction, users
 │   │   │   ├── controllers/     #   handlers HTTP
 │   │   │   ├── services/        #   logique métier (appels ml-service, etc.)
@@ -50,6 +50,7 @@ nextride/
 │   │   │   └── config.js
 │   │   ├── tests/
 │   │   └── Dockerfile
+│   ├── dashboard/               # Streamlit analytics (gold views)
 │   └── ml-service/              # Flask price prediction      (ex: prediction/)
 │       ├── app/
 │       │   ├── api.py           #   routes (/predict, /health)
@@ -61,16 +62,16 @@ nextride/
 │       └── Dockerfile
 
 ├── pipeline/                    # Code qui déplace/transforme la donnée
-│   ├── scrapers/                #   Selenium — avito, moteur   (ex: scraping/)
-│   ├── producers/               #   CSV → Kafka               (ex: kafka/)
-│   ├── processors/              #   Spark cleaning job        (ex: spark/)
+│   ├── scrapers/                #   avito + moteur (JSON/lxml)  (ex: scraping/)
+│   ├── processors/              #   silver_cleaner (bronze → silver)
+│   ├── serving/                 #   pg_db helper + sync_cars (silver → postgres)
 │   ├── synthetic/               #   data generators           (ex: data_generator/)
-│   └── recommendations/         #   algorithmes               (ex: recommendations/ + backend/scripts)
+│   └── recommendations/         #   combined algorithm        (ex: recommendations/ + backend/scripts)
 
 ├── infra/                       # Définition de l'infrastructure
-│   ├── cassandra/               #   schema.cql, migrations
-│   ├── kafka/                   #   topics, config
-│   └── docker/                  #   Dockerfiles partagés + runners (wait_for_cassandra.py, entrypoints)
+│   ├── clickhouse/              #   init SQL (bronze, silver, gold)
+│   ├── postgres/                #   schéma opérationnel
+│   └── docker/                  #   Dockerfiles partagés + runners (entrypoints)
 
 ├── deploy/                      # Orchestration & déploiement
 │   ├── docker-compose.yml       #   (actuellement à la racine)
@@ -94,7 +95,7 @@ nextride/
 1. **Chaque app est autonome** : son `Dockerfile`, ses `tests/`, ses
    dépendances. On l'édite ou la supprime sans toucher aux autres.
 2. **`pipeline/` est purement data** : pas de code HTTP ni d'UI ; uniquement ce
-   que consomment les jobs (Kafka, Spark, scripts).
+   que consomment les jobs (scrapers, cleaners, seeds, recommandations).
 3. **`infra/` = code d'infra** (schémas, configs, Dockerfiles partagés),
    séparé du code applicatif.
 4. **`deploy/` = comment on met en marche** (compose files, env). Les services

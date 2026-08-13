@@ -1,102 +1,79 @@
 # NextRide — Real-Time Car Analytics & Recommendation
 
-A full-stack, Dockerized big-data pipeline for the **Moroccan used-car market**
-(Avito / Moteur). It ingests scraped car listings, streams them through
-**Kafka**, cleans them with **Spark**, stores them in **Cassandra**, serves a
-**REST API**, and exposes a **React frontend** with price prediction and
-personalized recommendations.
-
-> **Status:** the *pipeline* works end-to-end. Web scraping and the real ML
-> price model are the next milestones — see [Roadmap](#roadmap).
-
----
-
-## 1. Architecture
+A full-stack, Dockerized pipeline for the **Moroccan used-car market**
+(Avito / Moteur). It scrapes live listings into a **ClickHouse** data
+warehouse (bronze → silver → gold), exposes an analytics **dashboard**, and
+serves a **React frontend** with price prediction and personalized
+recommendations backed by **PostgreSQL**.
 
 ```
                           ┌───────────────┐
-   data/ (scraped CSVs)──▶│   producer    │  publishes raw rows
-                          └──────┬────────┘      as JSON
-                                 │ Kafka topics: avito_cars / moteur_cars
-                          ┌──────▼────────┐
-                          │     Kafka     │
-                          └──────┬────────┘
-                                 │ streaming consume (earliest)
-                          ┌──────▼────────┐
-                          │    Spark      │  cleans/normalises French data,
-                          │ (PySpark job) │  deterministic UUIDs, dedup
-                          └──────┬────────┘
-                                 │ write
-                          ┌──────▼────────┐
-                          │  Cassandra    │  cars_keyspace (8 tables)
-                          └──────┬────────┘
-                                 │ queries (cassandra-driver)
-                 ┌───────────────┴───────────────┐
-                 │        ml-service (:5001)     │  deterministic price
-                 │         Flask /predict        │  estimator (placeholder
-                 └───────────────▲───────────────┘   for the real model)
-                                 │
-                 ┌───────────────┴───────────────┐
-                 │        backend (:5002→5000)   │  Express REST API
-                 │  auth · cars · search ·       │
-                 │  predictions · recommendations│
-                 └───────────────▲───────────────┘
-                                 │
-                 ┌───────────────┴───────────────┐
-                 │       frontend (:3000)        │  React (built + nginx)
-                 └───────────────────────────────┘
+  scrapers (avito/moteur)─▶│   ClickHouse  │  bronze (raw) → silver (cleaned)
+                          └───────┬───────┘  gold (aggregates) → dashboard :8501
+                                  │ sync_cars (silver → postgres cars)
+                          ┌───────▼───────┐
+                          │  PostgreSQL   │  users, cars, views, favorites,
+                          └───────┬───────┘  searches, recommendations
+                                  │ queries (node-postgres)
+                  ┌───────────────┴───────────────┐
+                  │        ml-service (:5001)     │  price estimator
+                  └───────────────▲───────────────┘
+                  ┌───────────────┴───────────────┐
+                  │        backend (:5002→5000)   │  Express REST API
+                  │  auth · cars · search ·       │
+                  │  predictions · recommendations│
+                  └───────────────▲───────────────┘
+                                  │
+                  ┌───────────────┴───────────────┐
+                  │       frontend (:3000)        │  React (built + nginx)
+                  └───────────────────────────────┘
 
-  One-shot jobs (after the core is up):
+  One-shot jobs:
     data-gen      seeds synthetic users / views / favorites / searches
     recommend     precomputes recommendations (combined_recommendations.py)
 ```
 
 ### Components
 
-| Service           | Image / runtime             | Host port | Role                                        |
-|-------------------|-----------------------------|-----------|---------------------------------------------|
-| `cassandra`       | `cassandra:4.1`             | `9042`    | Storage (`cars_keyspace`)                   |
-| `cassandra-init`  | `cassandra:4.1`             | —         | Applies `infra/cassandra/schema.cql` (once) |
-| `kafka`           | `apache/kafka:3.7.0`        | `9092`    | Messaging (KRaft, single node)              |
-| `kafka-init`      | `apache/kafka:3.7.0`        | —         | Creates topics `avito_cars`/`moteur_cars`   |
-| `spark`           | `apache/spark:3.5.0-python3` | —        | Streaming cleaning Kafka → Cassandra        |
-| `producer`        | `python:3.11-slim`          | —         | CSV → Kafka (one-shot)                      |
-| `ml-service`      | `python:3.11-slim`          | `5001`    | `POST /predict` price estimator             |
-| `backend`         | `node:20-alpine`            | `5002`    | Express API                                 |
-| `frontend`        | `node:20` + `nginx:alpine`  | `3000`    | React SPA                                   |
-| `data-gen`        | `python:3.11-slim`          | —         | Synthetic user data (one-shot)              |
-| `recommend`       | `python:3.11-slim`          | —         | Recommendation computation (one-shot)       |
-
-> **Note on ports:** the backend is exposed on host port **5002** because
-> port 5000 is already used by another project on this machine. The frontend
-> build is configured with `REACT_APP_API_URL=http://localhost:5002`.
+| Service      | Image / runtime                | Host port | Role                                        |
+|--------------|--------------------------------|-----------|---------------------------------------------|
+| `clickhouse` | `clickhouse/clickhouse-server` | `8123`    | Data warehouse (bronze/silver/gold)         |
+| `postgres`   | `postgres:16-alpine`           | `5432`    | Operational DB (serving layer)              |
+| `dashboard`  | `python:3.11-slim` + Streamlit | `8501`    | Analytics dashboard over gold views         |
+| `ml-service` | `python:3.11-slim`             | `5001`    | `POST /predict` price estimator             |
+| `backend`    | `node:20-alpine`               | `5002`    | Express API (PostgreSQL + ML service)       |
+| `frontend`   | `node:20` + `nginx:alpine`     | `3000`    | React SPA                                   |
+| `data-gen`   | `python:3.11-slim`             | —         | Synthetic user data (one-shot)              |
+| `recommend`  | `python:3.11-slim`             | —         | Recommendation computation (one-shot)       |
 
 ---
 
-## 2. Quick start
+## 1. Quick start
 
-Prerequisites: **Docker** with Docker Compose v2.
+Prerequisites: **Docker** with Docker Compose v2, **Python 3.10+**.
 
 ```bash
 # Build + start everything (first build takes a few minutes)
 docker compose -f deploy/docker-compose.yml up -d --build
 # ... or, if you have GNU make:
 make up
-
-# Watch the pipeline self-assemble:
-#   1. cassandra + kafka become healthy
-#   2. schema + topics are created
-#   3. spark starts streaming
-#   4. producer publishes the scraped CSVs
-#   5. data-gen seeds synthetic users, recommend computes recommendations
-docker compose -f deploy/docker-compose.yml ps
-
-# Check the data landed in Cassandra
-docker exec nextride-cassandra cqlsh -e "SELECT COUNT(*) FROM cars_keyspace.cleaned_cars;"
-
-# Run the end-to-end smoke test
-python tests/e2e/smoke_test.py
 ```
+
+### Data flow once the stack is up
+
+1. **Scrape** — `python pipeline/scrapers/avito_scraper.py --pages 3`
+   and `pipeline/scrapers/moteur_scraper.py --pages 3` write raw listings
+   into `bronze.listings` (checkpointed, deduplicated within a run).
+2. **Clean** — `python pipeline/processors/silver_cleaner.py` turns bronze
+   into `silver.listings` (one row per `(source, listing_id)`, cleaned).
+3. **Serve** — `python pipeline/serving/sync_cars.py` mirrors silver into
+   the PostgreSQL `cars` table (or `make sync-cars`).
+4. **Seed + recommend** (repeatable):
+   ```bash
+   docker compose -f deploy/docker-compose.yml run --rm data-gen
+   docker compose -f deploy/docker-compose.yml run --rm recommend
+   # or: make seed
+   ```
 
 Open the app:
 
@@ -105,22 +82,13 @@ Open the app:
 | Frontend   | http://localhost:3000        |
 | Backend    | http://localhost:5002        |
 | ML service | http://localhost:5001/health |
+| Dashboard  | http://localhost:8501        |
 
-### Manual / repeatable seeding
-
-`docker compose up -d` already runs the seeders once. To re-run them:
-
-```bash
-docker compose -f deploy/docker-compose.yml run --rm data-gen
-docker compose -f deploy/docker-compose.yml run --rm recommend
-# or: make seed
-```
-
-To re-publish the CSVs (idempotent — rows are de-duplicated by deterministic
-UUID):
+Check the warehouse / database:
 
 ```bash
-docker compose -f deploy/docker-compose.yml run --rm producer
+docker exec nextride-clickhouse clickhouse-client --query "SELECT source, count() FROM silver.listings GROUP BY source;"
+docker exec nextride-postgres psql -U nextride -d nextride -c "SELECT count(*) FROM cars;"
 ```
 
 ### Stop / reset
@@ -132,30 +100,30 @@ docker compose -f deploy/docker-compose.yml down -v   # stop + wipe volumes
 
 ---
 
-## 3. How the data flows
+## 2. The warehouse (medallion in ClickHouse)
 
-1. **Ingestion** — `pipeline/producers/producer.py` reads
-   `data/avito/avito_complete.csv` and `data/moteur/moteur_complete.csv` and
-   publishes every row as a UTF-8 JSON message to the corresponding topic
-   (strips the Moteur BOM from headers, drops empty values).
-2. **Streaming cleaning** — `pipeline/processors/spark_cleaning.py` (PySpark
-   Structured Streaming, `startingOffsets=earliest`) parses each JSON payload,
-   normalises the French column names to the English schema, cleans values
-   (price, mileage ranges, year, fiscal power, doors, sector, dates), filters
-   invalid fuel/transmission values, de-duplicates, and assigns a
-   **deterministic UUID** derived from `(source, listing_id)` so re-publishing
-   never creates duplicates.
-3. **Storage** — cleaned rows are written to `cars_keyspace.cleaned_cars`.
-   Synthetic user tables (`users`, `user_preferences`, `car_views_by_user`,
-   `favorite_cars_by_user`, `user_searches`) are seeded by `data-gen`.
-4. **Recommendations** — `recommend` runs
-   `pipeline/recommendations/combined_recommendations.py` (content-based +
-   user-based + item-based + hybrid) and stores results in
-   `user_recommendations`.
-5. **Serving** — the Express backend reads Cassandra, calls `ml-service`
-   (`POST /predict`) for price estimates, and serves the React frontend.
+- **Bronze** (`bronze.listings`) — raw append-only captures from the
+  scrapers, one row per seen ad (duplicates are expected and intentional;
+  they build history). Full payload kept as JSON.
+- **Silver** (`silver.listings`) — cleaned, conformed, deduplicated: one row
+  per `(source, listing_id)` using the latest capture. Cleaning rules
+  (price bounds, fuel/sector normalization, N/A handling) live in
+  `pipeline/processors/silver_cleaner.py`.
+- **Gold** — live aggregate views (`market_overview`, `brand_stats`,
+  `sector_stats`, `fuel_transmission_stats`, `year_stats`, `price_trend`)
+  consumed by the dashboard.
 
----
+The scrapers share a **canonical schema** (`pipeline/scrapers/schema.py`)
+so Avito and Moteur use identical labels. CSV output is a test artifact
+only — the production path is scrapers → ClickHouse → Postgres.
+
+## 3. The serving layer (PostgreSQL)
+
+`infra/postgres/init/01_schema.sql` defines the operational schema:
+`users`, `cars` (mirror of silver), `user_preferences`, `car_views_by_user`,
+`favorite_cars_by_user`, `user_searches`, `user_recommendations`,
+`user_similarities`, `car_predictions`. The backend reads/writes this DB via
+`node-postgres`; car IDs are deterministic `uuid5(source, listing_id)`.
 
 ## 4. Tests
 
@@ -163,8 +131,14 @@ docker compose -f deploy/docker-compose.yml down -v   # stop + wipe volumes
 # ML price service (pytest, no Docker needed)
 cd apps/ml-service && python -m pytest tests -q
 
-# Backend API (Jest + supertest, Cassandra & ML mocked, no Docker needed)
+# Backend API (Jest + supertest, PostgreSQL & ML mocked, no Docker needed)
 cd apps/api && npm test
+
+# Silver cleaner (unittest, no Docker needed)
+python tests/scrapers/test_silver_cleaner.py
+
+# Scraper smoke test (hits the live sites, limited rows)
+python tests/scrapers/scraper_smoke_test.py --limit 5
 
 # End-to-end smoke test (requires the stack to be running)
 python tests/e2e/smoke_test.py
@@ -173,110 +147,49 @@ python tests/e2e/smoke_test.py
 make test
 ```
 
-The smoke test verifies: backend up, ML service up, cars present in
-Cassandra, registration + login, search, price prediction, and authenticated
-routes.
-
----
-
-## 5. What was refactored (2026 cleanup)
-
-The 2023 codebase was cleaned, Dockerized, and reorganised into a
-domain-based monorepo (see `docs/ARCHITECTURE.md` for the full rationale):
-
-- **Dockerized everything** — `deploy/docker-compose.yml` + per-service
-  `Dockerfile`s under `infra/docker/`.
-- **New monorepo layout** — `apps/` (served applications: `api`, `web`,
-  `ml-service`), `pipeline/` (data code: `scrapers`, `producers`,
-  `processors`, `synthetic`, `recommendations`), `infra/` (schemas + Docker),
-  `deploy/` (orchestration), `tests/`, `docs/`.
-- **Replaced the TensorFlow model** — the old `ml_service.py` needed a
-  multi-GB TF runtime. It is now a deterministic, dependency-light price
-  estimator (same `/predict` contract, always returns a plausible MAD price).
-  The original artifacts (`.h5` weights, scalers, categorical mappings)
-  remain in `apps/ml-service/artifacts/` for the real model milestone.
-- **Coherent Cassandra schema** — `infra/cassandra/schema.cql` aligns every
-  table with the actual queries (user_id as partition key where the backend
-  filters by user, `user_recommendations` columns `method/rank/reason/score`,
-  `car_predictions` keyed by `(user_id, prediction_timestamp)`).
-- **Frontend API config** — the hardcoded `http://localhost:5000` URLs were
-  centralized in `apps/web/src/config.js` (`API_BASE_URL`, `ML_BASE_URL`),
-  driven by `REACT_APP_API_URL` at build time.
-- **Backend fixes** — env-driven Cassandra config, removed the unused
-  `@tensorflow/tfjs-node` dependency, split `app.js` (testable) from
-  `server.js`, fixed favorite remove queries for the new primary keys, made
-  `filters` a real map in `user_searches`, and made `/recommendations/generate`
-  read precomputed rows instead of shelling out to Python.
-- **Deterministic Spark IDs** — cleaned rows use `uuid5(source, listing_id)`,
-  making the pipeline idempotent.
-- **Seed scripts are env-driven** — `pipeline/synthetic/*` and the
-  recommendation scripts read `CASSANDRA_HOST` from the environment instead of
-  `localhost`.
-- **Repo hygiene** — `backend/node_modules` (15,900 files) was untracked from
-  git, `documentaions/` merged into `docs/`, root CSV dumps moved to `data/`.
-
----
-
-## 6. Project structure
+## 5. Project structure
 
 ```
-├── Makefile                        # make up / down / test / seed / smoke
+├── Makefile                        # make up / down / test / seed / smoke / sync-cars
 ├── deploy/
 │   └── docker-compose.yml          # full stack orchestration
 ├── infra/
-│   ├── cassandra/schema.cql        # Cassandra schema
-│   └── docker/                     # Dockerfiles + runner scripts
-├── apps/                           # served applications
-│   ├── api/                        #   Express REST API
-│   │   ├── src/  (config/routes/controllers/models/middleware)
-│   │   └── tests/
+│   ├── clickhouse/init/            # bronze/silver/gold SQL (applied on first start)
+│   ├── postgres/init/              # operational schema
+│   └── docker/                     # per-service Dockerfiles + runners
+├── apps/
+│   ├── api/                        #   Express REST API (PostgreSQL)
 │   ├── web/                        #   React frontend
+│   ├── dashboard/                  #   Streamlit analytics dashboard
 │   └── ml-service/                 #   Flask price prediction
-│       ├── app/  (api.py, features.py)
-│       ├── artifacts/              #     original TF model artifacts
-│       └── tests/
-├── pipeline/                       # data code (transform/move)
-│   ├── scrapers/                   #   Selenium (avito, moteur)
-│   ├── producers/                  #   CSV → Kafka
-│   ├── processors/                 #   Spark cleaning job
-│   ├── synthetic/                  #   data generators
-│   └── recommendations/            #   algorithms + combined runner
-├── data/                           # scraped CSVs (+ reference dumps)
-├── tests/e2e/                      # smoke_test.py
-├── docs/                           # PIPELINE.md, ARCHITECTURE.md, legacy/ (2023 docs)
-└── README.md
+├── pipeline/
+│   ├── scrapers/                   #   avito + moteur scrapers, schema, ClickHouse helper
+│   ├── processors/                 #   silver_cleaner.py (bronze → silver)
+│   ├── serving/                    #   pg_db helper + sync_cars (silver → postgres)
+│   ├── synthetic/                  #   data generators (users/views/favorites/searches)
+│   └── recommendations/            #   combined recommendation algorithm
+├── data/                           # scraped CSVs (test artifacts only)
+├── tests/
+│   ├── e2e/                        # smoke_test.py
+│   └── scrapers/                   # scraper smoke test + silver cleaner tests
+└── docs/                           # ARCHITECTURE.md, PIPELINE.md, legacy/
 ```
 
----
+## 6. Troubleshooting
 
-## 7. Troubleshooting
+- **`port is already allocated`** — change the `"HOST:CONTAINER"` mapping in
+  `deploy/docker-compose.yml` and `REACT_APP_API_URL` accordingly.
+- **Scrapers fail to connect to ClickHouse** — check the service is up
+  (`docker compose ps`) and credentials match `CLICKHOUSE_*`.
+- **Backend serves no cars** — run the silver cleaner then `make sync-cars`.
+- **No recommendations** — run `data-gen` then `recommend` (needs a seeded
+  user with views/favorites).
 
-- **`port is already allocated` on 5002/3000/9042/9092** — another process is
-  using it. Change the `"HOST:CONTAINER"` mapping in
-  `deploy/docker-compose.yml` and the `REACT_APP_API_URL` build arg
-  accordingly.
-- **Spark is slow on first start** — it downloads the Kafka/Cassandra
-  connector jars from Maven into the `spark_ivy` volume (a few minutes).
-- **`UnknownTopicOrPartitionException`** — run `docker compose -f
-  deploy/docker-compose.yml up -d` so `kafka-init` creates the topics before
-  Spark/subscribers start.
-- **Cassandra `no available connections`** — give Cassandra time
-  (`start_period` is 60s); check `docker logs nextride-cassandra`.
-- **Want the original ML model?** — the TF artifacts are still in
-  `apps/ml-service/artifacts/`. Swapping back means returning to a
-  TensorFlow-based image (see Roadmap).
+## 7. Roadmap
 
----
-
-## 8. Roadmap
-
-- **Web scraping** — finish wiring `pipeline/scrapers/avito_scraper.py` and
-  `pipeline/scrapers/moteur_scraper.py` (Selenium) to feed the producer
-  continuously.
-- **Real ML model** — retrain and serve the model behind the same `/predict`
-  contract using the original artifacts kept in `apps/ml-service/artifacts/`
-  (`.h5` weights, scalers, categorical mappings); the deterministic estimator
-  is only a placeholder.
-- **Airflow** — recreate scheduling DAGs for the scrapers (the 2023 DAGs were
-  removed during the cleanup; the scraping workflow itself is not yet wired in).
-- **Monitoring** — add structured logging and health dashboards.
+- **Real ML model** — train the price model on `silver.listings`/features
+  history and serve it behind the same `/predict` contract (the current
+  estimator is a placeholder).
+- **Scheduling** — automate scraping + cleaning (cron/Airflow) with
+  idempotent re-runs.
+- **Monitoring** — structured logging and pipeline health dashboards.
