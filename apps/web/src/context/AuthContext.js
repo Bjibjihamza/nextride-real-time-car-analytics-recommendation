@@ -1,7 +1,6 @@
-import React, { createContext, useState, useEffect } from 'react';
-import axios from 'axios';
-import { jwtDecode } from 'jwt-decode'; // Fixed import
-import { API_BASE_URL } from '../config';
+import React, { createContext, useState, useEffect, useContext } from 'react';
+import { jwtDecode } from 'jwt-decode';
+import { authService } from '../services/api';
 
 const AuthContext = createContext();
 
@@ -14,11 +13,9 @@ export const AuthProvider = ({ children }) => {
       const token = localStorage.getItem('token');
       if (token) {
         try {
-          const decoded = jwtDecode(token); // Using named export
+          const decoded = jwtDecode(token);
           const userId = decoded.userId;
-          const response = await axios.get(`${API_BASE_URL}/api/auth/verify`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
+          const response = await authService.verify(token);
           setUser({ userId, token, ...response.data.user });
         } catch (error) {
           console.error('Error verifying token:', error);
@@ -32,10 +29,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = async ({ email, password }) => {
-    const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
-      email,
-      password,
-    });
+    const response = await authService.login({ email, password });
     const { user, token } = response.data;
     localStorage.setItem('token', token);
     setUser({ userId: user.id, token, ...user });
@@ -53,4 +47,4 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-export const useAuth = () => React.useContext(AuthContext);
+export const useAuth = () => useContext(AuthContext);
