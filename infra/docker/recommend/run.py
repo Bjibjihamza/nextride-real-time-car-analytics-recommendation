@@ -4,26 +4,23 @@ import os
 import subprocess
 import sys
 
-from cassandra.cluster import Cluster
-
-os.environ["WAIT_FOR_TABLE"] = "users"
-from wait_for_cassandra import main as wait_for_cassandra  # noqa: E402
+sys.path.insert(0, "/app")
+from pg_db import get_conn  # noqa: E402
 
 MAX_USERS = int(os.environ.get("MAX_USERS", "5"))
 
 
 def get_user_ids() -> list:
-    cluster = Cluster([os.environ.get("CASSANDRA_HOST", "cassandra")])
+    conn = get_conn()
     try:
-        session = cluster.connect(os.environ.get("CASSANDRA_KEYSPACE", "cars_keyspace"))
-        rows = session.execute("SELECT user_id FROM users")
-        return [str(row.user_id) for row in rows]
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM users")
+            return [str(row["user_id"]) for row in cur.fetchall()]
     finally:
-        cluster.shutdown()
+        conn.close()
 
 
 def main() -> None:
-    wait_for_cassandra()
     user_ids = get_user_ids()
     if not user_ids:
         print("No users found — run the data-gen service first.")

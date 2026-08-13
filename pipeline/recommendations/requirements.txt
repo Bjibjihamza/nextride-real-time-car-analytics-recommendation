@@ -1,6 +1,6 @@
-cassandra-driver==3.29.2
 pandas==2.2.3
 numpy==1.26.4
 scikit-learn==1.5.2
 scipy==1.14.1
 pytz==2024.2
+psycopg2-binary==2.9.12

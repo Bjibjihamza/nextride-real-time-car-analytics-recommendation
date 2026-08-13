@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS user_recommendations (
     rank                 INT,
     recommendation_reason TEXT,
     similarity_score     REAL,
+    created_at           TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (user_id, car_id)
 );
 

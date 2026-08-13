@@ -4,9 +4,6 @@ import os
 import subprocess
 import sys
 
-os.environ["WAIT_FOR_TABLE"] = "cleaned_cars"
-from wait_for_cassandra import main as wait_for_cassandra  # noqa: E402
-
 SCRIPTS = [
     "users.py",
     "user_preferences.py",
@@ -19,7 +16,6 @@ os.environ.setdefault("NUM_USERS", "10")
 
 
 def main() -> None:
-    wait_for_cassandra()
     for script in SCRIPTS:
         print(f"=== Running {script} ===")
         result = subprocess.run([sys.executable, os.path.join("/app/scripts", script)])

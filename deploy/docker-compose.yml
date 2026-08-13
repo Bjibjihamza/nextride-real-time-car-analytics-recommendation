@@ -294,12 +294,13 @@ services:
       dockerfile: infra/docker/data-gen/Dockerfile
     container_name: nextride-data-gen
     depends_on:
-      cassandra-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
-      CASSANDRA_HOST: cassandra
-      CASSANDRA_KEYSPACE: cars_keyspace
-      WAIT_TIMEOUT: "600"
+      PG_HOST: postgres
+      PG_DATABASE: nextride
+      PG_USER: nextride
+      PG_PASSWORD: nextride
       NUM_USERS: "10"
     restart: "no"
 
@@ -312,12 +313,13 @@ services:
       dockerfile: infra/docker/recommend/Dockerfile
     container_name: nextride-recommend
     depends_on:
-      cassandra-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     environment:
-      CASSANDRA_HOST: cassandra
-      CASSANDRA_KEYSPACE: cars_keyspace
-      WAIT_TIMEOUT: "600"
+      PG_HOST: postgres
+      PG_DATABASE: nextride
+      PG_USER: nextride
+      PG_PASSWORD: nextride
       MAX_USERS: "5"
     restart: "no"
 
