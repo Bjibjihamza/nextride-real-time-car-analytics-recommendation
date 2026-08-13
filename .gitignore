@@ -22,6 +22,11 @@ dist/
 # Uploaded images
 apps/api/images/cars/
 
+# Scraper checkpoints & test dumps
+data/*/.progress.json
+tests/scrapers/output/
+tests/scrapers/__pycache__/
+
 # Logs
 *.log
 

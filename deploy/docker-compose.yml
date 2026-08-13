@@ -57,6 +57,30 @@ services:
     restart: "no"
 
   # ------------------------------------------------------------------
+  # Data warehouse (ClickHouse) - bronze/silver/gold layers
+  # ------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: nextride-clickhouse
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # native TCP
+    environment:
+      CLICKHOUSE_DB: bronze
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: nextride
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ../infra/clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
   # Messaging
   # ------------------------------------------------------------------
   kafka:
@@ -250,6 +274,7 @@ services:
 
 volumes:
   cassandra_data:
+  clickhouse_data:
   kafka_data:
   spark_checkpoint:
   spark_ivy:
