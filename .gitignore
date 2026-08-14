@@ -27,6 +27,9 @@ data/*/.progress.json
 tests/scrapers/output/
 tests/scrapers/__pycache__/
 
+# Generated ML datasets
+data/ml/
+
 # Logs
 *.log
 
