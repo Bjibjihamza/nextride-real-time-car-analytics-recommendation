@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# Data / raw
+data/raw/
+*.parquet
+
+# ML artifacts
+apps/ml/artifacts/
+*.h5
+*.pkl
+mlruns/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
